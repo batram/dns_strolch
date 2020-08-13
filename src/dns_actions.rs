@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 use byteorder::{BigEndian, ByteOrder, WriteBytesExt};
 use dns_parser::Packet;
 use rustls::{ClientSessionMemoryCache, Session};
@@ -33,7 +32,6 @@ impl Request {
         let rc_config = TLS_CLIENT_CONFIG.get_or_set(|| {
             let mut config = rustls::ClientConfig::new();
             config.set_persistence(ClientSessionMemoryCache::new(128));
-
             config
                 .root_store
                 .add_server_trust_anchors(&webpki_roots::TLS_SERVER_ROOTS);
@@ -116,8 +114,7 @@ pub fn doh_lookup(server: &str, ip: &str, path: &str, request: &[u8]) -> Vec<u8>
 
     let request = Request::new(server.to_string(), ip.to_string(), full_path.to_string());
     let resp = request.send().unwrap();
-    //TODO: check if 200 OK, else raise hell
-    //HTTP/2 503
+
     return resp;
 }
 
@@ -139,100 +136,6 @@ pub fn udp_lookup(server: &str, request: &[u8]) -> Vec<u8> {
         Ok((size, _src2)) => buf2[0..size].to_vec(),
         Err(_) => Vec::new(), //TODO: send error packet
     };
-}
-
-pub fn refuse_query_cname_answer(pkt: &Packet, name: String) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(512);
-
-    let m = format!("{}", name);
-    let name = m.as_str();
-    let c = format!("{}.plzwait", name);
-    let cname: &str = c.as_str();
-
-    let head = dns_parser::Header {
-        id: pkt.header.id,
-        query: false,
-        opcode: dns_parser::Opcode::StandardQuery,
-        authoritative: true,
-        truncated: false,
-        recursion_desired: true,
-        recursion_available: true,
-        authenticated_data: false,
-        checking_disabled: false,
-        response_code: dns_parser::ResponseCode::NoError,
-        questions: 1, //1,
-        answers: 1,
-        nameservers: 0,
-        additional: 0,
-    };
-    buf.extend([0u8; 12].iter());
-
-    head.write(&mut buf[..12]);
-
-    for part in name.split('.') {
-        assert!(part.len() < 63);
-        let ln = part.len() as u8;
-        buf.push(ln);
-        buf.extend(part.as_bytes());
-    }
-    buf.push(0);
-    //TYPE CNAME 5
-    buf.write_u16::<BigEndian>(5 as u16).unwrap();
-
-    //CLASS IN 1
-    buf.write_u16::<BigEndian>(1).unwrap();
-
-    /*
-      0  1  2  3  4  5  6  7  8  9  0  1  2  3  4  5
-    +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
-    |                                               |
-    /                                               /
-    /                      NAME                     /
-    |                                               |
-    +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
-    |                      TYPE                     |
-    +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
-    |                     CLASS                     |
-    +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
-    |                      TTL                      |
-    |                                               |
-    +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
-    |                   RDLENGTH                    |
-    +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--|
-    /                     RDATA                     /
-    /                                               /
-    +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
-    */
-
-    for part in name.split('.') {
-        assert!(part.len() < 63);
-        let ln = part.len() as u8;
-        buf.push(ln);
-        buf.extend(part.as_bytes());
-    }
-    buf.push(0);
-
-    //TYPE CNAME 5
-    buf.write_u16::<BigEndian>(5 as u16).unwrap();
-
-    //CLASS IN 1
-    buf.write_u16::<BigEndian>(1).unwrap();
-
-    //TTL 32 bit signed integer
-    buf.write_i32::<BigEndian>(1000 as i32).unwrap();
-
-    //RDLENGTH  unsigned 16 bit integer
-    buf.write_u16::<BigEndian>((cname.len() + 2) as u16)
-        .unwrap();
-
-    for part in cname.split('.') {
-        assert!(part.len() < 63);
-        let ln = part.len() as u8;
-        buf.push(ln);
-        buf.extend(part.as_bytes());
-    }
-    buf.push(0);
-    return buf.to_vec();
 }
 
 pub fn raw_set_ttl(dns_answer: &Vec<u8>, ttl: u32) -> Vec<u8> {
@@ -318,7 +221,7 @@ pub fn fix_up_cache_response(dns_question: &Vec<u8>, mut dns_answer: Vec<u8>) ->
     return dns_answer;
 }
 
-pub fn resolved_local_answer(pkt: &Packet, ip: IpAddr, name: &String, ttl: i32) -> Vec<u8> {
+pub fn local_answer(pkt: &Packet, ip: IpAddr, name: &String, ttl: i32) -> Vec<u8> {
     let mut buf = Vec::with_capacity(512);
 
     let m = format!("{}", name);
@@ -409,12 +312,15 @@ pub fn resolved_local_answer(pkt: &Packet, ip: IpAddr, name: &String, ttl: i32) 
     return buf.to_vec();
 }
 
-pub fn create_question(domain: &str) -> Vec<u8> {
+pub fn name_error_answer(pkt: &Packet, ip: IpAddr, name: &String) -> Vec<u8> {
     let mut buf = Vec::with_capacity(512);
 
+    let m = format!("{}", name);
+    let name = m.as_str();
+
     let head = dns_parser::Header {
-        id: 124,
-        query: true,
+        id: pkt.header.id,
+        query: false,
         opcode: dns_parser::Opcode::StandardQuery,
         authoritative: true,
         truncated: false,
@@ -422,7 +328,8 @@ pub fn create_question(domain: &str) -> Vec<u8> {
         recursion_available: true,
         authenticated_data: false,
         checking_disabled: false,
-        response_code: dns_parser::ResponseCode::NoError,
+        //signifies that the domain name referenced in the query does not exist
+        response_code: dns_parser::ResponseCode::NameError,
         questions: 1,
         answers: 0,
         nameservers: 0,
@@ -432,7 +339,7 @@ pub fn create_question(domain: &str) -> Vec<u8> {
 
     head.write(&mut buf[..12]);
 
-    for part in domain.split('.') {
+    for part in name.split('.') {
         assert!(part.len() < 63);
         let ln = part.len() as u8;
         buf.push(ln);
@@ -440,8 +347,23 @@ pub fn create_question(domain: &str) -> Vec<u8> {
     }
 
     buf.push(0);
+    match ip {
+        IpAddr::V4(_) => {
+            buf.write_u16::<BigEndian>(1).unwrap();
+        }
+        IpAddr::V6(_) => {
+            buf.write_u16::<BigEndian>(28).unwrap();
+        }
+    }
+
     buf.write_u16::<BigEndian>(1).unwrap();
-    buf.write_u16::<BigEndian>(1).unwrap();
+
+    for part in name.split('.') {
+        assert!(part.len() < 63);
+        let ln = part.len() as u8;
+        buf.push(ln);
+        buf.extend(part.as_bytes());
+    }
 
     return buf.to_vec();
 }

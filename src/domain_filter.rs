@@ -1,42 +1,102 @@
 use dns_parser::Packet;
+use seahash;
 use state::Storage;
 use state_list::StateList;
 use std::collections::HashMap;
-use std::fs;
 use std::net::IpAddr;
 use std::sync::Mutex;
-use std::{thread, time};
-use tld;
 
-static HARDMAPPED_DOMAINS: Storage<Mutex<HashMap<String, IpAddr>>> = Storage::new();
+pub static HARDMAPPED_DOMAINS: Storage<Mutex<HashMap<String, IpAddr>>> = Storage::new();
 
-pub fn domain_ignored(domain: &str, allow_list: &StateList<String>) -> bool {
-    for entry in allow_list.get_entries() {
-        if entry.starts_with("!") {
-            let mut entry = entry.strip_prefix("!").unwrap();
-            if entry.starts_with("*.") {
-                entry = entry.strip_prefix("*").unwrap();
-            }
-
-            if domain.ends_with(entry) {
-                return true;
-            }
-        }
-    }
-    return false;
+#[derive(Debug, std::clone::Clone, std::cmp::PartialEq)]
+pub enum FResp {
+    Allowed,
+    StarAllowed,
+    Hardcoded,
+    Unknown,
+    TMPList,
+    Ignored,
+    Hashed,
 }
 
-pub fn domain_matches_star(domain: &str, allow_list: &StateList<String>) -> bool {
+#[derive(std::clone::Clone, std::cmp::PartialEq)]
+pub struct FilterResult {
+    pub domain: String,
+    pub filter: Option<String>,
+    pub ip: Option<std::net::IpAddr>,
+    pub state: FResp,
+}
+
+pub fn check_domain(
+    domain: &String,
+    qtype: dns_parser::QueryType,
+    allow_list: &StateList<String>,
+    tmp_list: &StateList<String>,
+) -> FilterResult {
+    if let Some(ip) = get_hardcoded_ip(&domain, qtype) {
+        return FilterResult {
+            domain: domain.to_string(),
+            filter: Some(format!("{} {}", domain, ip)),
+            ip: Some(ip),
+            state: FResp::Hardcoded,
+        };
+    }
+
+    return list_matches(domain, allow_list, tmp_list);
+}
+
+pub fn list_matches(
+    domain: &str,
+    allow_list: &StateList<String>,
+    tmp_list: &StateList<String>,
+) -> FilterResult {
+    let mut filter_result = FilterResult {
+        domain: domain.to_string(),
+        filter: None,
+        ip: None,
+        state: FResp::Unknown,
+    };
+    let mut hashed_domain = String::new();
+
+    //TMP list is probably shorter and should only contain complete domains
+    if tmp_list.contains(&domain.to_string()) {
+        filter_result.filter = Some(domain.to_string());
+        filter_result.state = FResp::TMPList;
+        return filter_result;
+    }
+
     for entry in allow_list.get_entries() {
         if entry.starts_with("*.") {
             let matchme = entry.strip_prefix("*").unwrap();
 
             if domain.ends_with(matchme) {
-                return true;
+                filter_result.state = FResp::StarAllowed;
+                filter_result.filter = Some(entry);
             }
+        } else if entry.starts_with("#") {
+            if hashed_domain.is_empty() {
+                hashed_domain = hash_domain(domain);
+            }
+            if hashed_domain == entry {
+                filter_result.state = FResp::Hashed;
+                filter_result.filter = Some(entry);
+            }
+        } else if entry.starts_with("!") {
+            let mut mod_entry = entry.strip_prefix("!").unwrap();
+            if mod_entry.starts_with("*.") {
+                mod_entry = mod_entry.strip_prefix("*").unwrap();
+            }
+
+            if domain.ends_with(mod_entry) {
+                filter_result.state = FResp::Ignored;
+                filter_result.filter = Some(entry);
+            }
+        } else if entry == domain {
+            filter_result.state = FResp::Allowed;
+            filter_result.filter = Some(entry);
         }
     }
-    return false;
+    return filter_result;
 }
 
 pub fn find_domain_name(pkt: &Packet) -> Option<String> {
@@ -52,45 +112,14 @@ pub fn find_domain_name(pkt: &Packet) -> Option<String> {
     return None;
 }
 
-pub fn parse_host_list(str: &str) -> HashMap<String, IpAddr> {
-    let mut mapped_ips = HashMap::<String, IpAddr>::new();
-
-    for line in str.split("\n") {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-
-        let split: Vec<&str> = trimmed.split_ascii_whitespace().collect();
-        if split.len() == 2 {
-            split[1]
-                .parse()
-                .map(|ip| mapped_ips.insert(split[0].to_string(), ip))
-                .unwrap_or_else(|e| {
-                    eprintln!("wuups, failed to parse ip: {:?} {:?}", split, e);
-                    None
-                });
-        } else {
-            eprintln!("wuups, don't understand config: {:?}", split);
-        }
-    }
-
-    return mapped_ips;
-}
-
-pub fn get_hard_mapped_hosts() -> HashMap<String, IpAddr> {
-    let file_path = "hardcoded.txt";
-    let entries = fs::read_to_string(file_path).unwrap_or_else(|e| {
-        println!("Couldn't load hardcoded domains: {} {}", file_path, e);
-        return String::new();
-    });
-
-    return parse_host_list(entries.as_str());
+pub fn init_hard_mapped_hosts() -> HashMap<String, IpAddr> {
+    let entries = "";
+    return parse_host_list(entries);
 }
 
 pub fn get_hardcoded_ip(name: &String, qtype: dns_parser::QueryType) -> Option<IpAddr> {
     let mapped_ips = HARDMAPPED_DOMAINS
-        .get_or_set(|| Mutex::new(get_hard_mapped_hosts()))
+        .get_or_set(|| Mutex::new(init_hard_mapped_hosts()))
         .lock()
         .unwrap();
 
@@ -105,58 +134,40 @@ pub fn get_hardcoded_ip(name: &String, qtype: dns_parser::QueryType) -> Option<I
     return mapped_ips.get(key).map(|ip| ip.clone());
 }
 
-pub fn remove_wait_cname(mut domain: String) -> String {
-    if domain.ends_with(".plzwait") {
-        thread::sleep(time::Duration::from_millis(1000));
-        domain = domain.strip_suffix(".plzwait").unwrap().to_string();
+pub fn parse_host_list(str: &str) -> HashMap<String, IpAddr> {
+    let mut mapped_ips = HashMap::<String, IpAddr>::new();
+
+    for line in str.split("\n") {
+        parse_config_line(line).map({
+            |(domain, ip)| mapped_ips.insert(domain, ip)
+        });
     }
 
-    return domain;
+    return mapped_ips;
 }
 
-pub fn allow_request(
-    domain: &String,
-    allow_list: &StateList<String>,
-    tmp_list: &StateList<String>,
-) -> (&'static str, bool) {
-    if allow_list.contains(&domain) {
-        return ("allowed", true);
-    }
+pub fn parse_config_line(line: &str) -> Option<(String, IpAddr)>{
+    let mut trimmed = line.trim();
 
-    if tmp_list.contains(&domain) {
-        return ("tmplist", true);
-    }
-
-    if domain_matches_star(&domain.as_str(), allow_list) {
-        return ("star_allowed", true);
-    }
-
-    return ("unknown", false);
-}
-
-pub fn dot_reverse(str: &String) -> String {
-    let mut split = str.split('.').collect::<Vec<&str>>();
-    split.reverse();
-    return split.join(".");
-}
-
-pub fn top_level_filter(domain: &str) -> Result<String, String> {
-    let split = domain.split('.').collect::<Vec<&str>>();
-    let vlen = split.len();
-    if vlen >= 3 {
-        let top2 = split[vlen - 2].to_string() + "." + split[vlen - 1];
-        if tld::exist(top2.as_str()) {
-            let mdomain = "*.".to_string() + split[vlen - 3] + "." + top2.as_str();
-            return Ok(mdomain.to_string());
+    if !trimmed.is_empty() {
+        if trimmed.starts_with("=") {
+            trimmed = trimmed.strip_prefix("=").unwrap();
         }
-    }
-    if vlen >= 2 {
-        let top1 = split.last().unwrap();
-        if tld::exist(top1) {
-            let mdomain = "*.".to_string() + split[vlen - 2] + "." + top1;
-            return Ok(mdomain.to_string());
+        let split: Vec<&str> = trimmed.split_ascii_whitespace().collect();
+        if split.len() == 2 {
+            split[1].parse()
+                .map(|ip: IpAddr| Some((split[0].to_string(), ip)))
+                .unwrap_or_else( |_| {
+                    None
+                })
+        } else {
+            None
         }
+    } else {
+        None
     }
+}
 
-    return Err(format!("Can't determine top level domain of {}", domain));
+pub fn hash_domain(domain: &str) -> String {
+    return format!("#{:16X}", seahash::hash(domain.as_bytes()));
 }
