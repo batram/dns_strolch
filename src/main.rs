@@ -9,7 +9,7 @@ fn main() {
 
 
     dns_strolch::init_allow_file(None);
-    let mut settings = dns_strolch::STROLCH_SETTINGS.get().clone();
+    let mut settings = dns_strolch::STROLCH_SETTINGS.get().lock().unwrap();
 
     if args.len() > 1 {
         settings.bind_to = args[1].clone();
@@ -32,7 +32,6 @@ fn main() {
         );
         return String::new();
     });
-    dns_strolch::STROLCH_SETTINGS.set(settings);
 
     dns_strolch::init_hardmapped(entries.as_str());
     dns_strolch::run_udp_server(dns_strolch::toastable::block_callback);

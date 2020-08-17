@@ -16,7 +16,7 @@ fn main() {
 mod dnsstrolch_service {
     use log::LevelFilter;
     use simple_logging;
-    use std::fs;
+    use std::env;
     use std::net::UdpSocket;
     use std::str;
     use std::thread;
@@ -48,18 +48,12 @@ mod dnsstrolch_service {
         }
     }
 
-    pub fn full_path(filename: &str) -> String {
-        let fullpath = ::std::env::current_exe()
-            .unwrap()
-            .with_file_name(filename)
-            .into_os_string()
-            .into_string()
-            .unwrap();
-        return fullpath;
-    }
-
     pub fn run_service() -> Result<()> {
-        simple_logging::log_to_file(full_path("loggy"), LevelFilter::Info).unwrap();
+        //move cwd to path of exe, to look for files
+        let root = ::std::env::current_exe().unwrap().with_file_name("");
+        env::set_current_dir(&root).unwrap();
+
+        simple_logging::log_to_file("loggy", LevelFilter::Info).unwrap();
 
         // Create a channel to be able to poll a stop event from the service worker loop.
         let (shutdown_tx, shutdown_rx) = mpsc::channel();
@@ -96,19 +90,11 @@ mod dnsstrolch_service {
             process_id: None,
         })?;
 
-        dns_strolch::init_allow_file(Some(full_path("dns_list.txt")));
+        dns_strolch::load_config_file(None);
+        dns_strolch::init_allow_file(None);
+        dns_strolch::load_hardcoded_file(None);
 
-        let hardcoded_file_path = full_path("hardcoded.txt");
-        let entries = fs::read_to_string(hardcoded_file_path.clone()).unwrap_or_else(|e| {
-            warn!(
-                "Couldn't load hardcoded domains: {} {}",
-                hardcoded_file_path, e
-            );
-            return String::new();
-        });
-        dns_strolch::init_hardmapped(entries.as_str());
-
-        let settings = dns_strolch::STROLCH_SETTINGS.get();
+        let settings = dns_strolch::STROLCH_SETTINGS.get().lock().unwrap().clone();
 
         let socket = UdpSocket::bind(settings.bind_to.as_str()).unwrap_or_else(|e| {
             warn!("Unable to open socket:\n {}", e);
