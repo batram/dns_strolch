@@ -62,22 +62,29 @@ impl DNSCache {
     }
 
     pub fn cache_key(pkt_buf: &Vec<u8>) -> Option<CacheKey> {
-        let pkt = Packet::parse(&pkt_buf).unwrap();
+        let parse_res = Packet::parse(&pkt_buf);
 
-        if pkt.questions.len() >= 1 && pkt.header.response_code == ResponseCode::NoError {
-            let firstq = pkt.questions.first().unwrap();
-            let domain = format!("{}", firstq.qname);
-
-            return match firstq.qtype {
-                x if DNSCache::cacheable(x) => Some(CacheKey {
-                    domain: domain,
-                    qtype: x as u8,
-                }),
-                _ => None,
-            };
+        match parse_res {
+            Ok(pkt) => {
+                if pkt.questions.len() >= 1 && pkt.header.response_code == ResponseCode::NoError {
+                    let firstq = pkt.questions.first().unwrap();
+                    let domain = format!("{}", firstq.qname);
+        
+                    return match firstq.qtype {
+                        x if DNSCache::cacheable(x) => Some(CacheKey {
+                            domain: domain,
+                            qtype: x as u8,
+                        }),
+                        _ => None,
+                    };
+                }
+                None
+            },
+            Err(e) => {
+                warn!("DNS parser error: {:?}", e);
+                None
+            }
         }
-
-        return None;
     }
 
     pub fn remove(
