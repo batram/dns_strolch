@@ -1,17 +1,17 @@
 use dns_strolch;
 use std::env;
-use std::fs;
 use log::LevelFilter;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
     simple_logging::log_to_stderr(LevelFilter::Info);
 
-
+    dns_strolch::load_config_file(None);
     dns_strolch::init_allow_file(None);
-    let mut settings = dns_strolch::STROLCH_SETTINGS.get().lock().unwrap();
+    dns_strolch::load_hardcoded_file(None);
 
     if args.len() > 1 {
+        let mut settings = dns_strolch::STROLCH_SETTINGS.get().lock().unwrap();
         settings.bind_to = args[1].clone();
     }
 
@@ -24,15 +24,5 @@ fn main() {
     })
     .expect("Error setting Ctrl-C handler");
 
-    let hardcoded_file_path = settings.hardcoded_path.clone();
-    let entries = fs::read_to_string(hardcoded_file_path.clone()).unwrap_or_else(|e| {
-        println!(
-            "Couldn't load hardcoded domains: {} {}",
-            hardcoded_file_path, e
-        );
-        return String::new();
-    });
-
-    dns_strolch::init_hardmapped(entries.as_str());
     dns_strolch::run_udp_server(dns_strolch::toastable::block_callback);
 }

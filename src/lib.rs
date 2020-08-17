@@ -45,6 +45,7 @@ pub struct StrolchSettings {
     pub hardcoded_path: String,
     pub dns_rules_path: String,
     pub configure_path: String,
+    pub cache_timeout: u64,
 }
 
 pub fn default_settings(){
@@ -59,7 +60,7 @@ pub fn default_settings(){
     let hardcoded_path: String = "hardcoded.txt".to_string();
     let dns_rules_path: String = "dns_rules.txt".to_string();
     let configure_path: String = "strolchy.conf".to_string();
-
+    
     STROLCH_SETTINGS.set(Mutex::new(StrolchSettings {
         bind_to,
         dns_server_arg,
@@ -70,21 +71,18 @@ pub fn default_settings(){
         hardcoded_path,
         dns_rules_path,
         configure_path,
+        cache_timeout: 60 * 60,
     }));
 }
 
 pub fn init_empty() {
-    default_settings();
+    init_cache_tmp();
     ALLOW_LIST.init_empty();
-    TMP_LIST.init_empty();
-    DNS_CACHE.init();
 }
 
 pub fn init_string(rules: String) {
-    default_settings();
+    init_cache_tmp();
     ALLOW_LIST.init_string(rules);
-    TMP_LIST.init_empty();
-    DNS_CACHE.init();
 
     //extract hardcoded ips from allow list
     for entry in ALLOW_LIST.get_entries() {
@@ -95,24 +93,27 @@ pub fn init_string(rules: String) {
 }
 
 pub fn init_allow_file(dns_file_param: Option<String>) {
-    default_settings();
-    let settings = STROLCH_SETTINGS.get();
+    init_cache_tmp();
+    let settings = STROLCH_SETTINGS.get().try_lock().unwrap().clone();
     let dns_file  = match dns_file_param {
         Some(dns_file_op) => dns_file_op,
-        _ => settings.lock().unwrap().dns_rules_path.clone()
+        _ => settings.dns_rules_path.clone()
     };
 
     ALLOW_LIST.load(dns_file);
-    TMP_LIST.init_empty();
-    DNS_CACHE.init();
 }
 
+pub fn init_cache_tmp(){
+    default_settings();
+    TMP_LIST.init_empty();
+    DNS_CACHE.init(STROLCH_SETTINGS.get().try_lock().unwrap().cache_timeout.clone());
+}
 
 pub fn load_hardcoded_file(hardcoded_file_param: Option<String>) {
-    let settings = STROLCH_SETTINGS.get();
+    let settings = STROLCH_SETTINGS.get().try_lock().unwrap().clone();
     let hardcoded_file_path  = match hardcoded_file_param {
         Some(hardcoded_file_op) => hardcoded_file_op,
-        _ => settings.lock().unwrap().hardcoded_path.clone()
+        _ => settings.hardcoded_path.clone()
     };
 
     let entries = fs::read_to_string(hardcoded_file_path.clone()).unwrap_or_else(|e| {
@@ -126,9 +127,9 @@ pub fn load_hardcoded_file(hardcoded_file_param: Option<String>) {
 }
 
 pub fn load_config_file(config_file: Option<String>) {
-    default_settings();
+    init_cache_tmp();
 
-    let mut settings = STROLCH_SETTINGS.get().lock().unwrap();
+    let mut settings = STROLCH_SETTINGS.get().try_lock().unwrap();
     let config_file_path  = match config_file {
         Some(config_param) => config_param,
         _ => settings.configure_path.clone()
@@ -176,6 +177,9 @@ pub fn load_config_file(config_file: Option<String>) {
                     "configure_path" => {
                         settings.configure_path = split[1].to_string();
                     }
+                    "cache_timeout" => {
+                        settings.cache_timeout = split[1].parse().unwrap_or(64 * 64);
+                    }
                     _ => {}
                 }
             } 
@@ -189,7 +193,7 @@ pub fn init_hardmapped(entries: &str) {
 }
 
 pub fn run_udp_server(callback: RequestCallback) {
-    let settings = STROLCH_SETTINGS.get().lock().unwrap();
+    let settings = STROLCH_SETTINGS.get().try_lock().unwrap().clone();
 
     let socket = UdpSocket::bind(settings.bind_to.as_str()).unwrap_or_else(|e| {
         warn!("Unable to open socket:\n {}", e);
@@ -272,7 +276,7 @@ fn answer_dns_question(
             dns_actions::fix_up_cache_response(dns_question, cache_answer)
         }
         None => {
-            let settings = STROLCH_SETTINGS.get().lock().unwrap().clone();
+            let settings = STROLCH_SETTINGS.get().try_lock().unwrap().clone();
 
             let none_cache_answer = match settings.dns_server_arg.as_str() {
                 "DOH" => {

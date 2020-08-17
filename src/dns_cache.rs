@@ -6,7 +6,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 pub struct DNSCache {
-    cache_ttl: u64,
+    cache_ttl: Storage<u64>,
     cache_map: Storage<Mutex<HashMap<CacheKey, CacheEntry>>>,
 }
 
@@ -24,14 +24,15 @@ pub struct CacheKey {
 impl DNSCache {
     pub const fn new() -> DNSCache {
         DNSCache {
-            cache_ttl: 60 * 60,
+            cache_ttl: Storage::new(),
             cache_map: Storage::new(),
         }
     }
 
-    pub fn init(&self) {
+    pub fn init(&self, ttl: u64) {
         let dns_hash = HashMap::new();
         self.cache_map.set(Mutex::new(dns_hash));
+        self.cache_ttl.set(ttl);
     }
 
     pub fn add_item(&self, key: CacheKey, pkt: Vec<u8>) {
@@ -111,7 +112,7 @@ impl DNSCache {
                 Some(entry) => {
                     let duration = entry.timestamp.elapsed();
 
-                    if duration > Duration::from_secs(self.cache_ttl) {
+                    if duration > Duration::from_secs(*self.cache_ttl.get()) {
                         self.remove(&key, Some(dns_hash));
                         return None;
                     }
