@@ -57,7 +57,7 @@ pub fn init_string(rules: String) {
     }
 }
 
-pub fn init_file(dns_file: &'static str) {
+pub fn init_file(dns_file: String) {
     ALLOW_LIST.load(dns_file);
     TMP_LIST.init_empty();
     DNS_CACHE.init();
@@ -84,22 +84,27 @@ pub fn run_udp_server(bind_to: &str, callback: RequestCallback) {
                 let socketx = socket.try_clone().unwrap();
 
                 thread::spawn(move || {
-                    check_dns_request(&request_buf[0..size].to_vec(), &socketx, src, arg, callback);
+                    check_dns_request(&request_buf[0..size].to_vec(), &socketx, src, arg, callback, logs);
                 });
             }
             Err(e) => {
-                eprintln!("{:<12} : {}", "con bungled", e);
+                eprintln!("{:<12} : {:?}", "con bungled", e);
             }
         }
     }
 }
 
-fn check_dns_request(
+pub fn logs(arguments: &str){
+    println!("{}", arguments);
+}
+
+pub fn check_dns_request(
     dns_question: &Vec<u8>,
     answer_socket: &UdpSocket,
     src: SocketAddr,
     arg: &str,
     callback: RequestCallback,
+    log: RequestCallback,
 ) {
     let question_pkt = dns_actions::parse_dns_packet(dns_question);
     let domain = domain_filter::find_domain_name(&question_pkt).unwrap();
@@ -112,6 +117,7 @@ fn check_dns_request(
         src.ip(),
         &domain,
         qtype,
+        log,
     );
 
     //handle filter result 
@@ -134,7 +140,7 @@ fn check_dns_request(
         }
         _ => {
             //ALLOWED
-            answer_dns_question(domain, &dns_question, answer_socket, src, arg, qtype);
+            answer_dns_question(domain, &dns_question, answer_socket, src, arg, qtype, log);
         }
     }
 }
@@ -146,17 +152,18 @@ fn answer_dns_question(
     src: SocketAddr,
     arg: &str,
     qtype: dns_parser::QueryType,
+    log: RequestCallback,
 ) {
     //Check cache first, after that use method from arg
     let dns_answer = match DNS_CACHE.lookup_packet(&dns_question) {
         Some(cache_answer) => {
-            log_request_state("[CACHE] ret", src.ip(), &domain, qtype);
+            log_request_state("[CACHE] ret", src.ip(), &domain, qtype, log);
             dns_actions::fix_up_cache_response(dns_question, cache_answer)
         }
         None => {
             let none_cache_answer = match arg {
                 "DOH" => {
-                    log_request_state("[DOH] lookup", src.ip(), &domain, qtype);
+                    log_request_state("[DOH] lookup", src.ip(), &domain, qtype, log);
                     dns_actions::doh_lookup(
                         DNS_SERVER_DOH,
                         DNS_SERVER_DOH_IP,
@@ -165,7 +172,7 @@ fn answer_dns_question(
                     )
                 }
                 _ => {
-                    log_request_state("[UDP] lookup", src.ip(), &domain, qtype);
+                    log_request_state("[UDP] lookup", src.ip(), &domain, qtype, log);
                     dns_actions::udp_lookup(DNS_SERVER_UDP, dns_question)
                 }
             };
@@ -177,14 +184,14 @@ fn answer_dns_question(
     dns_actions::dns_response(&dns_answer, &answer_socket, src);
 }
 
-fn log_request_state(state: &str, ip: IpAddr, domain: &String, qtype: dns_parser::QueryType) {
-    println!(
+fn log_request_state(state: &str, ip: IpAddr, domain: &String, qtype: dns_parser::QueryType, log: RequestCallback) {
+    log(format!(
         "{:<12} : {:<22} : [{:>4}] {}",
         state,
         ip,
         format!("{:?}", qtype),
         domain
-    );
+    ).as_str());
 }
 
 fn refuse_query_method(
@@ -232,4 +239,100 @@ pub fn remove_hardcoded_ip(str: &str){
         domain_filter::HARDMAPPED_DOMAINS
         .get_or_set(|| Mutex::new(domain_filter::init_hard_mapped_hosts())).lock().unwrap().remove(&domain)
     });
+}
+
+
+#[cfg(all(windows))]
+use toast_notifications;
+
+fn toast_callback(arguments: &str) {
+    let split = arguments.split("*").collect::<Vec<&str>>();
+    if split.len() != 2 {
+        unreachable!("don't understand this message: {}", arguments);
+    }
+    let fun = split[0];
+    let bdecoded = base64::decode(split[1]).unwrap();
+    let domain = str::from_utf8(bdecoded.as_slice()).unwrap();
+
+    match fun {
+        "allow" => {
+            ALLOW_LIST.add_item(domain.to_string());
+            //TODO?: Store questions and resolve at this point?
+        }
+        "ignore" => {
+            ALLOW_LIST.add_item("!".to_string() + domain);
+        }
+        "top" => match top_level_filter(domain) {
+            Ok(filter) => {
+                ALLOW_LIST.add_item(filter);
+            }
+            Err(e) => panic!(e),
+        },
+        "tmp" => {
+            //will not be persisted
+            //TODO: Addjust and track TTL
+            TMP_LIST.add_item(domain.to_string());
+        }
+        f => println!("can't do {} yet!", f),
+    }
+}
+
+pub fn block_callback(domain: &str) {
+    let template = get_toast_template(&domain);
+
+    //Show windows TOAST notification
+    //TODO: move to notify-rust lib and wurschtle our wincode in there
+    #[cfg(all(windows, not(target_os = "linux")))]
+    toast_notifications::show_deduped_message(&String::from(domain), template.as_str(), toast_callback, 20);
+}
+
+pub fn get_toast_template(domain: &str) -> String {
+    //TODO: Make XML Safe text insertions, since DNS names can contain anything :D
+    let enced = base64::encode(domain);
+    let dm = domain.replace(|c: char| !c.is_ascii() || c == '<' || c == '>', "_");
+
+    return format!(
+        "<toast launch=\"launch*{enced}\">
+            <visual>
+            <binding template =\"ToastGeneric\">
+            <text>DNS BLOCKED: {domain}</text>
+            </binding>
+            </visual>
+            <actions>
+            <action activationType=\"background\" content=\"ALLOW\" arguments=\"allow*{enced}\"/>
+            <action activationType=\"background\" content=\"ALLOW TOP\" arguments=\"top*{enced}\"/>
+            <action activationType=\"background\" content=\"TMP\" arguments=\"tmp*{enced}\"/>
+            <action activationType=\"background\" content=\"IGNORE\" arguments=\"ignore*{enced}\"/>
+            </actions>
+        </toast>",
+        enced = enced,
+        domain = dm
+    );
+}
+
+pub fn dot_reverse(str: &String) -> String {
+    let mut split = str.split('.').collect::<Vec<&str>>();
+    split.reverse();
+    return split.join(".");
+}
+
+pub fn top_level_filter(domain: &str) -> Result<String, String> {
+    let split = domain.split('.').collect::<Vec<&str>>();
+    let vlen = split.len();
+    if vlen >= 3 {
+        let top2 = split[vlen - 2].to_string() + "." + split[vlen - 1];
+        if tld::exist(top2.as_str()) {
+            let mdomain = "*.".to_string() + split[vlen - 3] + "." + top2.as_str();
+            return Ok(mdomain.to_string());
+        }
+    }
+    if vlen >= 2 {
+        let top1 = split.last().unwrap();
+        if tld::exist(top1) {
+            let mdomain = "*.".to_string() + split[vlen - 2] + "." + top1;
+            return Ok(mdomain.to_string());
+        }
+    }
+
+    return Err(format!("Can't determine top level domain of {}", domain));
 }
