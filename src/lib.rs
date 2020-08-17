@@ -10,11 +10,12 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Mutex;
 use std::fs;
 use state::Storage;
-extern crate tld;
 mod dns_cache;
 pub mod dns_actions;
 pub mod domain_filter;
 pub mod toastable;
+#[macro_use]
+extern crate log;
 
 type RequestCallback = fn(arguments: &str);
 
@@ -116,7 +117,7 @@ pub fn load_config_file(config_file: Option<String>) {
     };
 
     let entries = fs::read_to_string(config_file_path.clone()).unwrap_or_else(|e| {
-        println!(
+        warn!(
             "Couldn't load config file: {} {}",
             config_file_path, e
         );
@@ -159,7 +160,6 @@ pub fn load_config_file(config_file: Option<String>) {
                     }
                     _ => {}
                 }
-                println!("{}", split[1]);
             } 
         }
     }
@@ -177,11 +177,11 @@ pub fn run_udp_server(callback: RequestCallback) {
     let settings = STROLCH_SETTINGS.get();
 
     let socket = UdpSocket::bind(settings.bind_to.as_str()).unwrap_or_else(|e| {
-        println!("Unable to open socket:\n {}", e);
+        warn!("Unable to open socket:\n {}", e);
         std::process::exit(1);
     });
 
-    println!("{:<12} : {}", "Listening", settings.bind_to);
+    info!("{:<12} : {}", "Listening", settings.bind_to);
     let mut request_buf = [0; 512];
     loop {
         match socket.recv_from(&mut request_buf) {
@@ -189,18 +189,14 @@ pub fn run_udp_server(callback: RequestCallback) {
                 let socketx = socket.try_clone().unwrap();
 
                 thread::spawn(move || {
-                    check_dns_request(&request_buf[0..size].to_vec(), &socketx, src, callback, logs);
+                    check_dns_request(&request_buf[0..size].to_vec(), &socketx, src, callback);
                 });
             }
             Err(e) => {
-                eprintln!("{:<12} : {:?}", "con bungled", e);
+                debug!("{:<12} : {:?}", "con bungled", e);
             }
         }
     }
-}
-
-pub fn logs(arguments: &str){
-    println!("{}", arguments);
 }
 
 pub fn check_dns_request(
@@ -208,7 +204,6 @@ pub fn check_dns_request(
     answer_socket: &UdpSocket,
     src: SocketAddr,
     callback: RequestCallback,
-    log: RequestCallback,
 ) {
     let question_pkt = dns_actions::parse_dns_packet(dns_question);
     let domain = domain_filter::find_domain_name(&question_pkt).unwrap();
@@ -221,7 +216,6 @@ pub fn check_dns_request(
         src.ip(),
         &domain,
         qtype,
-        log,
     );
 
     //handle filter result 
@@ -244,7 +238,7 @@ pub fn check_dns_request(
         }
         _ => {
             //ALLOWED
-            answer_dns_question(domain, &dns_question, answer_socket, src, qtype, log);
+            answer_dns_question(domain, &dns_question, answer_socket, src, qtype);
         }
     }
 }
@@ -255,20 +249,19 @@ fn answer_dns_question(
     answer_socket: &UdpSocket,
     src: SocketAddr,
     qtype: dns_parser::QueryType,
-    log: RequestCallback,
 ) {
     let settings = STROLCH_SETTINGS.get();
 
     //Check cache first, after that use method from arg
     let dns_answer = match DNS_CACHE.lookup_packet(&dns_question) {
         Some(cache_answer) => {
-            log_request_state("[CACHE] ret", src.ip(), &domain, qtype, log);
+            log_request_state("[CACHE] ret", src.ip(), &domain, qtype);
             dns_actions::fix_up_cache_response(dns_question, cache_answer)
         }
         None => {
             let none_cache_answer = match settings.dns_server_arg.as_str() {
                 "DOH" => {
-                    log_request_state("[DOH] lookup", src.ip(), &domain, qtype, log);
+                    log_request_state("[DOH] lookup", src.ip(), &domain, qtype);
 
                     dns_actions::doh_lookup(
                         &settings.doh_server_name.as_str(),
@@ -278,7 +271,7 @@ fn answer_dns_question(
                     )
                 }
                 _ => {
-                    log_request_state("[UDP] lookup", src.ip(), &domain, qtype, log);
+                    log_request_state("[UDP] lookup", src.ip(), &domain, qtype);
                     dns_actions::udp_lookup(&settings.dns_server_udp, dns_question)
                 }
             };
@@ -290,14 +283,14 @@ fn answer_dns_question(
     dns_actions::dns_response(&dns_answer, &answer_socket, src);
 }
 
-fn log_request_state(state: &str, ip: IpAddr, domain: &String, qtype: dns_parser::QueryType, log: RequestCallback) {
-    log(format!(
+fn log_request_state(state: &str, ip: IpAddr, domain: &String, qtype: dns_parser::QueryType) {
+    info!(
         "{:<12} : {:<22} : [{:>4}] {}",
         state,
         ip,
         format!("{:?}", qtype),
         domain
-    ).as_str());
+    );
 }
 
 fn refuse_query_method(

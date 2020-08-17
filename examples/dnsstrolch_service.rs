@@ -1,4 +1,6 @@
 extern crate windows_service;
+#[macro_use]
+extern crate log;
 
 #[cfg(windows)]
 fn main() -> windows_service::Result<()> {
@@ -12,9 +14,9 @@ fn main() {
 
 #[cfg(windows)]
 mod dnsstrolch_service {
+    use log::LevelFilter;
+    use simple_logging;
     use std::fs;
-    use std::fs::OpenOptions;
-    use std::io::prelude::*;
     use std::net::UdpSocket;
     use std::str;
     use std::thread;
@@ -32,16 +34,6 @@ mod dnsstrolch_service {
 
     const SERVICE_NAME: &str = "dnsstrolch_service";
     const SERVICE_TYPE: ServiceType = ServiceType::OWN_PROCESS;
-
-    pub fn logum(lien: &str) {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .append(true)
-            .open(full_path("loggy"))
-            .unwrap();
-
-        if let Err(_e) = writeln!(file, "{}", lien) {}
-    }
 
     pub fn run() -> Result<()> {
         // Register generated `ffi_service_main` with the system and start the service, blocking
@@ -67,6 +59,8 @@ mod dnsstrolch_service {
     }
 
     pub fn run_service() -> Result<()> {
+        simple_logging::log_to_file(full_path("loggy"), LevelFilter::Info).unwrap();
+
         // Create a channel to be able to poll a stop event from the service worker loop.
         let (shutdown_tx, shutdown_rx) = mpsc::channel();
 
@@ -106,12 +100,9 @@ mod dnsstrolch_service {
 
         let hardcoded_file_path = full_path("hardcoded.txt");
         let entries = fs::read_to_string(hardcoded_file_path.clone()).unwrap_or_else(|e| {
-            logum(
-                format!(
-                    "Couldn't load hardcoded domains: {} {}",
-                    hardcoded_file_path, e
-                )
-                .as_str(),
+            warn!(
+                "Couldn't load hardcoded domains: {} {}",
+                hardcoded_file_path, e
             );
             return String::new();
         });
@@ -120,7 +111,7 @@ mod dnsstrolch_service {
         let settings = dns_strolch::STROLCH_SETTINGS.get();
 
         let socket = UdpSocket::bind(settings.bind_to.as_str()).unwrap_or_else(|e| {
-            logum(format!("Unable to open socket:\n {}", e).as_str());
+            warn!("Unable to open socket:\n {}", e);
             std::process::exit(1);
         });
 
@@ -128,11 +119,11 @@ mod dnsstrolch_service {
         socket
             .set_read_timeout(Some(Duration::new(1, 100)))
             .unwrap_or_else(|e| {
-                logum(format!("Unable to set read_timeout:\n {}", e).as_str());
+                warn!("Unable to set read_timeout:\n {}", e);
                 std::process::exit(1);
             });
 
-        logum(format!("{:<12} : {}", "Listening", settings.bind_to).as_str());
+        info!("{:<12} : {}", "Listening", settings.bind_to);
         let mut request_buf = [0; 512];
         loop {
             match socket.recv_from(&mut request_buf) {
@@ -144,17 +135,15 @@ mod dnsstrolch_service {
                             &socketx,
                             src,
                             dns_strolch::toastable::block_callback,
-                            logum,
                         );
                     });
                 }
                 Err(e) => {
                     match e.kind() {
-                        std::io::ErrorKind::TimedOut => { /* ignore timeouts, we want this to happen */
+                        std::io::ErrorKind::TimedOut => {
+                            /* ignore timeouts, we want this to happen */
                         }
-                        _ => logum(
-                            format!("{:<12} : {:#?} -- {}", "con bungled", e.kind(), e).as_str(),
-                        ),
+                        _ => info!("{:<12} : {:#?} -- {}", "con bungled", e.kind(), e),
                     }
                 }
             }
@@ -168,7 +157,7 @@ mod dnsstrolch_service {
                 Err(mpsc::RecvTimeoutError::Timeout) => (),
             };
         }
-        logum(format!("{:<12}", "Service stopping").as_str());
+        info!("{:<12}", "Service stopping");
 
         //save list on service exit
         dns_strolch::ALLOW_LIST

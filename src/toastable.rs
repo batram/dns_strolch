@@ -32,7 +32,7 @@ fn toast_callback(arguments: &str) {
             //TODO: Addjust and track TTL
             TMP_LIST.add_item(domain.to_string());
         }
-        f => println!("can't do {} yet!", f),
+        f => warn!("can't do {} yet!", f),
     }
 }
 

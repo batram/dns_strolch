@@ -1,9 +1,11 @@
 use dns_strolch;
 use std::env;
 use std::fs;
+use log::LevelFilter;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
+    simple_logging::log_to_stderr(LevelFilter::Info);
 
 
     dns_strolch::init_allow_file(None);

@@ -18,6 +18,8 @@ state_list = { git = "https://github.com/batram/state_list", version = "0.1.1"}
 ctrlc = "3.1.4"
 tld = "2.10.0"
 seahash = ""
+log = { version = "0.4" }
+simple-logging = "2.0.2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 toast_notifications = { git = "https://github.com/batram/toast_notifications" }
