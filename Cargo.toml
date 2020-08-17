@@ -21,6 +21,7 @@ seahash = ""
 
 [target.'cfg(target_os = "windows")'.dependencies]
 toast_notifications = { git = "https://github.com/batram/toast_notifications" }
+windows-service = ""
 
 [lib]
 name = "dns_strolch"
