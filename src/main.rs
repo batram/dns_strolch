@@ -25,11 +25,14 @@ fn main() {
 
     let hardcoded_file_path = "hardcoded.txt";
     let entries = fs::read_to_string(hardcoded_file_path).unwrap_or_else(|e| {
-        println!("Couldn't load hardcoded domains: {} {}", hardcoded_file_path, e);
+        println!(
+            "Couldn't load hardcoded domains: {} {}",
+            hardcoded_file_path, e
+        );
         return String::new();
     });
 
     dns_strolch::init_hardmapped(entries.as_str());
 
-    dns_strolch::run_udp_server(bind_to, dns_strolch::block_callback);
+    dns_strolch::run_udp_server(bind_to, dns_strolch::toastable::block_callback);
 }

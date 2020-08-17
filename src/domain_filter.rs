@@ -138,15 +138,13 @@ pub fn parse_host_list(str: &str) -> HashMap<String, IpAddr> {
     let mut mapped_ips = HashMap::<String, IpAddr>::new();
 
     for line in str.split("\n") {
-        parse_config_line(line).map({
-            |(domain, ip)| mapped_ips.insert(domain, ip)
-        });
+        parse_config_line(line).map({ |(domain, ip)| mapped_ips.insert(domain, ip) });
     }
 
     return mapped_ips;
 }
 
-pub fn parse_config_line(line: &str) -> Option<(String, IpAddr)>{
+pub fn parse_config_line(line: &str) -> Option<(String, IpAddr)> {
     let mut trimmed = line.trim();
 
     if !trimmed.is_empty() {
@@ -155,11 +153,10 @@ pub fn parse_config_line(line: &str) -> Option<(String, IpAddr)>{
         }
         let split: Vec<&str> = trimmed.split_ascii_whitespace().collect();
         if split.len() == 2 {
-            split[1].parse()
+            split[1]
+                .parse()
                 .map(|ip: IpAddr| Some((split[0].to_string(), ip)))
-                .unwrap_or_else( |_| {
-                    None
-                })
+                .unwrap_or_else(|_| None)
         } else {
             None
         }

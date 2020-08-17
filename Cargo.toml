@@ -14,7 +14,7 @@ webpki-roots = ""
 dns-parser = ""
 byteorder = "1.3.4"
 state = { version = "0.2" }
-state_list = { git = "https://github.com/batram/state_list" }
+state_list = { git = "https://github.com/batram/state_list", version = "0.1.1"}
 ctrlc = "3.1.4"
 tld = "2.10.0"
 seahash = ""
