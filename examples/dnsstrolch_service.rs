@@ -102,9 +102,7 @@ mod dnsstrolch_service {
             process_id: None,
         })?;
 
-        let bind_to = "0.0.0.0:53";
-
-        dns_strolch::init_file(full_path("dns_list.txt"));
+        dns_strolch::init_allow_file(Some(full_path("dns_list.txt")));
 
         let hardcoded_file_path = full_path("hardcoded.txt");
         let entries = fs::read_to_string(hardcoded_file_path.clone()).unwrap_or_else(|e| {
@@ -119,9 +117,9 @@ mod dnsstrolch_service {
         });
         dns_strolch::init_hardmapped(entries.as_str());
 
-        let arg = "DOH";
+        let settings = dns_strolch::STROLCH_SETTINGS.get();
 
-        let socket = UdpSocket::bind(bind_to).unwrap_or_else(|e| {
+        let socket = UdpSocket::bind(settings.bind_to.as_str()).unwrap_or_else(|e| {
             logum(format!("Unable to open socket:\n {}", e).as_str());
             std::process::exit(1);
         });
@@ -134,7 +132,7 @@ mod dnsstrolch_service {
                 std::process::exit(1);
             });
 
-        logum(format!("{:<12} : {}", "Listening", bind_to).as_str());
+        logum(format!("{:<12} : {}", "Listening", settings.bind_to).as_str());
         let mut request_buf = [0; 512];
         loop {
             match socket.recv_from(&mut request_buf) {
@@ -145,7 +143,6 @@ mod dnsstrolch_service {
                             &request_buf[0..size].to_vec(),
                             &socketx,
                             src,
-                            arg,
                             dns_strolch::toastable::block_callback,
                             logum,
                         );

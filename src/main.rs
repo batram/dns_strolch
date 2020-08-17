@@ -5,14 +5,13 @@ use std::fs;
 fn main() {
     let args: Vec<String> = env::args().collect();
 
-    let mut bind_to = "0.0.0.0:53";
+
+    dns_strolch::init_allow_file(None);
+    let mut settings = dns_strolch::STROLCH_SETTINGS.get().clone();
 
     if args.len() > 1 {
-        bind_to = args[1].as_str();
+        settings.bind_to = args[1].clone();
     }
-
-    let dns_list_file_path: String = "dns_list.txt".to_string();
-    dns_strolch::init_file(dns_list_file_path);
 
     ctrlc::set_handler(|| {
         dns_strolch::ALLOW_LIST.sort_dedup_list({
@@ -23,16 +22,16 @@ fn main() {
     })
     .expect("Error setting Ctrl-C handler");
 
-    let hardcoded_file_path = "hardcoded.txt";
-    let entries = fs::read_to_string(hardcoded_file_path).unwrap_or_else(|e| {
+    let hardcoded_file_path = settings.hardcoded_path.clone();
+    let entries = fs::read_to_string(hardcoded_file_path.clone()).unwrap_or_else(|e| {
         println!(
             "Couldn't load hardcoded domains: {} {}",
             hardcoded_file_path, e
         );
         return String::new();
     });
+    dns_strolch::STROLCH_SETTINGS.set(settings);
 
     dns_strolch::init_hardmapped(entries.as_str());
-
-    dns_strolch::run_udp_server(bind_to, dns_strolch::toastable::block_callback);
+    dns_strolch::run_udp_server(dns_strolch::toastable::block_callback);
 }

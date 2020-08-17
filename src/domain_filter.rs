@@ -138,7 +138,7 @@ pub fn parse_host_list(str: &str) -> HashMap<String, IpAddr> {
     let mut mapped_ips = HashMap::<String, IpAddr>::new();
 
     for line in str.split("\n") {
-        parse_config_line(line).map({ |(domain, ip)| mapped_ips.insert(domain, ip) });
+        parse_config_line(line).map(|(domain, ip)| mapped_ips.insert(domain, ip));
     }
 
     return mapped_ips;
