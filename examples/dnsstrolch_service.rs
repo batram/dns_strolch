@@ -65,8 +65,8 @@ mod dnsstrolch_service {
                 // control manager. Always return NoError even if not implemented.
                 ServiceControl::Interrogate => ServiceControlHandlerResult::NoError,
 
-                // Handle stop
-                ServiceControl::Stop => {
+                // Handle stop or shotdown
+                ServiceControl::Stop | ServiceControl::Preshutdown  => {
                     shutdown_tx.send(()).unwrap();
                     ServiceControlHandlerResult::NoError
                 }
@@ -83,7 +83,7 @@ mod dnsstrolch_service {
         status_handle.set_service_status(ServiceStatus {
             service_type: SERVICE_TYPE,
             current_state: ServiceState::Running,
-            controls_accepted: ServiceControlAccept::STOP,
+            controls_accepted: ServiceControlAccept::STOP | ServiceControlAccept::PRESHUTDOWN,
             exit_code: ServiceExitCode::Win32(0),
             checkpoint: 0,
             wait_hint: Duration::default(),
